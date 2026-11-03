@@ -181,6 +181,7 @@ def with_derived_fall_events(events):
             '_derived': True,
         })
         print(f'DERIVED: {day} | Fall Events | 8:00–9:00 PM from RATA event {source_id}', flush=True)
+        print(f'::warning title=Fall Events listing missing::{day}: RATA is published but Fall Events has no matching official CouncilWare record. Check event category/tagging in MyCouncil.', flush=True)
     return events + derived
 
 
@@ -222,6 +223,27 @@ def generate(events):
         print(f'INCLUDED: {start:%Y-%m-%d} | {label} | {title}', flush=True)
         if cancelled:
             continue
+        # An inferred Fall Events meeting means MyCouncil did not return an
+        # official Fall Events record for this RATA meeting date.
+        # Display a one-time review appointment seven days beforehand.
+        # When the official record appears, this warning is no longer generated.
+        if rec.get('_derived'):
+            review_day = start.date() - timedelta(days=7)
+            review_start = datetime.combine(review_day, time(9, 30), tzinfo=TZ)
+            review_end = review_start + timedelta(minutes=15)
+            if review_end > now:
+                add_event(
+                    lines,
+                    f'aac-check-fall-events-{start:%Y%m%d}@alamoareascouting.org',
+                    '[Check MyCouncil] Fall Events meeting not listed',
+                    review_start, review_end, '', url,
+                    f'RATA is listed for {start:%B %d, %Y} at 7:00 PM, but no official '
+                    'Fall Events Committee listing was returned by CouncilWare. '
+                    'Check the Fall Events event category/tagging and confirm its '
+                    '8:00-9:00 PM schedule. This is a review task, not proof the '
+                    'meeting was cancelled.'
+                )
+                print(f'WARNING ENTRY: {review_day} 9:30 AM | Check official Fall Events listing for {start.date()}', flush=True)
         for days, action in PREP:
             day = start.date() - timedelta(days=days)
             prep_start = datetime.combine(day, time(9, 0), tzinfo=TZ)
