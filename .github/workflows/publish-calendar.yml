@@ -33,9 +33,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Convert public events to iCalendar
-               - name: Test CouncilWare SSL certificate
-        run: |
-          curl -Iv --max-time 20 https://www.alamoareascouting.org/
         run: python build_calendar.py
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
