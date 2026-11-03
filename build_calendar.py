@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""CouncilWare committee meetings + preparation checkpoints in ONE ICS calendar.
-
-No external Python packages required. The GitHub Actions workflow already in your
-repository can run this unchanged. Only public calendar data is published.
-"""
+"""CouncilWare committee calendar + preparation dates. Public, read-only source."""
 import json
 import re
 import sys
+import time as timelib
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone, time
@@ -14,194 +11,187 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 BASE = 'https://www.alamoareascouting.org/wp-content/plugins/councilware/calendar/render.php'
-TIMEZONE = ZoneInfo('America/Chicago')
+TZ = ZoneInfo('America/Chicago')
 CALENDAR_ID = '27'
 LOOKAHEAD_DAYS = 180
-OUTPUT = Path('site/aac-committees.ics')  # same URL as your existing Outlook subscription!
-
-# Only these 8 committee areas are included; no general camps or big events.
-# Add additional distinctive aliases to the relevant list if CouncilWare uses
-# another committee name. These are matched to public event TITLES.
+OUTPUT = Path('site/aac-committees.ics')
 COMMITTEES = {
-    'Aquatics Committee': ('aquatics', 'aquatic'),
-    'Climbing Committee': ('climbing',),
-    'COPE Committee': ('cope', 'challenging outdoor personal experience'),
-    'Fall Events Committee': ('fall events', 'fall event'),
-    'Fishing Committee': ('fishing', 'angling'),
-    'International Committee': ('international',),
-    'Radio Committee': ('radio', 'jota', 'joti', 'jamboree on the air'),
-    'RATA / Shooting Sports Committee': ('rata', 'shooting sports', 'shooting sport', 'range and target'),
+    'Aquatics': ('aquatics', 'aquatic'),
+    'Climbing': ('climbing',),
+    'COPE': ('cope', 'challenging outdoor personal experience'),
+    'Fall Events': ('fall events', 'fall event'),
+    'Fishing': ('fishing', 'angling'),
+    'International': ('international',),
+    'Radio': ('radio', 'jota', 'joti', 'jamboree on the air'),
+    'RATA / Shooting Sports': ('rata', 'shooting sports', 'shooting sport', 'range and target'),
 }
-
-# Titles must indicate a meeting, committee, or actual planning session.
-# This avoids including Fishing Adventures, Shooting Sports activities, etc.
-MEETING_INDICATORS = (
-    'committee', 'meeting', 'meetings', 'planning session',
-    'planning call', 'workgroup', 'working group',
-    'staff call', 'staff meeting', 'roundtable',
-)
-PREP_STAGES = (
-    (7, 'Prepare agenda', 'Review previous minutes and unresolved action items.'),
-    (3, 'Confirm details', 'Confirm agenda, meeting time, location, and participants.'),
-    (1, 'Final preparation', 'Review documents and notes for tomorrow’s meeting.'),
-)
+MEETING_TERMS = ('committee', 'meeting', 'meetings', 'planning session', 'planning call',
+                 'workgroup', 'working group', 'staff call', 'staff meeting', 'roundtable')
+PREP = ((7, 'Prepare agenda'), (3, 'Confirm details'), (1, 'Final preparation'))
 
 
-def normalize(s):
+def norm(s):
     return re.sub(r'\s+', ' ', str(s or '').casefold().replace('-', ' ')).strip()
 
 
-def has_phrase(text, phrase):
-    # Word boundaries prevent "radio" matching words like "radiology".
-    return bool(re.search(r'(?<!\w)' + re.escape(normalize(phrase)) + r'(?!\w)', text))
+def contains(text, word):
+    return re.search(r'(?<!\w)' + re.escape(norm(word)) + r'(?!\w)', text) is not None
 
 
 def classify(title):
-    text = normalize(title)
-    if not any(has_phrase(text, word) for word in MEETING_INDICATORS):
+    t = norm(title)
+    if not any(contains(t, x) for x in MEETING_TERMS):
         return None
     for label, aliases in COMMITTEES.items():
-        if any(has_phrase(text, alias) for alias in aliases):
+        if any(contains(t, a) for a in aliases):
             return label
     return None
 
 
-def ics_escape(text):
-    return (str(text or '').replace('\\', '\\\\')
-            .replace('\r\n', '\n').replace('\r', '\n')
-            .replace('\n', '\\n').replace(',', '\\,').replace(';', '\\;'))
+def localtime(s):
+    d = datetime.fromisoformat(str(s).replace('Z', '+00:00'))
+    return d.replace(tzinfo=TZ) if d.tzinfo is None else d.astimezone(TZ)
+
+
+def stamp(d):
+    return d.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+
+
+def escape(s):
+    return str(s or '').replace('\\', '\\\\').replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\\n').replace(',', '\\,').replace(';', '\\;')
 
 
 def fold(line):
-    """RFC 5545 content lines, folded at <=75 UTF-8 octets."""
-    out, current = [], ''
+    parts, current = [], ''
     for ch in line:
         if len((current + ch).encode('utf-8')) > 75:
-            out.append(current)
+            parts.append(current)
             current = ' ' + ch
         else:
             current += ch
-    out.append(current)
-    return '\r\n'.join(out)
+    parts.append(current)
+    return '\r\n'.join(parts)
 
 
-def local_datetime(value):
-    dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
-    return dt.replace(tzinfo=TIMEZONE) if dt.tzinfo is None else dt.astimezone(TIMEZONE)
-
-
-def utcstamp(dt):
-    return dt.astimezone(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-
-
-def fetch_events():
-    now = datetime.now(TIMEZONE)
-    # Start slightly in the past so prep events are included for near-term meetings.
-    parameters = urllib.parse.urlencode({
-        'calendarID': CALENDAR_ID,
-        'start': (now - timedelta(days=1)).date().isoformat(),
-        'end': (now + timedelta(days=LOOKAHEAD_DAYS)).date().isoformat(),
-    })
-    request = urllib.request.Request(BASE + '?' + parameters, headers={
-        'User-Agent': 'AAC-PublicCommitteeCalendar/1.0',
+def request_window(start, end):
+    params = urllib.parse.urlencode({'calendarID': CALENDAR_ID, 'start': start.isoformat(), 'end': end.isoformat()})
+    req = urllib.request.Request(BASE + '?' + params, headers={
+        'User-Agent': 'Mozilla/5.0 (compatible; AAC-CommitteeCalendar/1.2)',
         'Accept': 'application/json',
     })
-    with urllib.request.urlopen(request, timeout=35) as response:
-        events = json.loads(response.read().decode('utf-8-sig'))
-    if not isinstance(events, list) or not events:
-        raise RuntimeError('Calendar returned no event records; refusing to replace the published feed.')
-    return events
-
-
-def event_lines(uid, summary, start, end, stamp, url, details, location='', cancelled=False):
-    return [
-        'BEGIN:VEVENT', f'UID:{uid}', f'DTSTAMP:{stamp}',
-        f'DTSTART:{utcstamp(start)}', f'DTEND:{utcstamp(end)}',
-        f'SUMMARY:{ics_escape(summary)}',
-        f'LOCATION:{ics_escape(location)}',
-        f'DESCRIPTION:{ics_escape(details)}',
-        f'URL:{url}',
-        'STATUS:CANCELLED' if cancelled else 'STATUS:CONFIRMED',
-        'TRANSP:TRANSPARENT',
-        'END:VEVENT',
-    ]
-
-
-def generate(events, now=None):
-    now = now or datetime.now(TIMEZONE)
-    stamp = utcstamp(datetime.now(timezone.utc))
-    lines = [
-        'BEGIN:VCALENDAR', 'VERSION:2.0',
-        'PRODID:-//AAC Public Committee Meetings and Prep//EN',
-        'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
-        'X-WR-CALNAME:AAC Committee Meetings',
-        'X-WR-TIMEZONE:America/Chicago',
-        'REFRESH-INTERVAL;VALUE=DURATION:PT24H',
-    ]
-    count = prep_count = 0
-    seen = set()
-    for record in events:
-        title = str(record.get('title') or record.get('fullName') or '')
-        committee = classify(title)
-        event_id = record.get('eventId')
-        if not committee or event_id is None or not record.get('start') or not record.get('end'):
-            continue
-        if str(event_id) in seen:
-            continue
-        seen.add(str(event_id))
+    # Retry transient network or certificate-chain errors; NEVER disable TLS verification.
+    for attempt in range(3):
         try:
-            start = local_datetime(record['start'])
-            end = local_datetime(record['end'])
+            with urllib.request.urlopen(req, timeout=40) as response:
+                data = json.loads(response.read().decode('utf-8-sig'))
+            if not isinstance(data, list):
+                raise ValueError('CouncilWare returned an unexpected non-list response')
+            return data
+        except Exception as exc:
+            if attempt == 2:
+                raise RuntimeError(f'Could not fetch {start} to {end}: {exc}') from exc
+            print(f'Retrying {start} to {end} following {type(exc).__name__}', flush=True)
+            timelib.sleep(3 * (attempt + 1))
+
+
+def fetch_all():
+    today = datetime.now(TZ).date()
+    stop = today + timedelta(days=LOOKAHEAD_DAYS)
+    start = today - timedelta(days=1)
+    found = {}
+    count = 0
+    print('Calendar ID:', CALENDAR_ID, '| Today:', today, '| End:', stop, flush=True)
+    # Small date windows mirror the date-scoped FullCalendar requests.
+    while start < stop:
+        end = min(start + timedelta(days=28), stop)
+        records = request_window(start, end)
+        count += len(records)
+        print(f'SOURCE WINDOW {start} to {end}: {len(records)} events', flush=True)
+        for rec in records:
+            event_id = rec.get('eventId')
+            if event_id is not None:
+                found[str(event_id)] = rec
+        start = end
+    if not found:
+        raise RuntimeError('CouncilWare returned no records; keeping prior feed')
+    print(f'SOURCE TOTAL: {count} rows / {len(found)} unique event IDs', flush=True)
+    return list(found.values())
+
+
+def add_event(lines, uid, title, start, end, location, url, description, cancelled=False):
+    now = stamp(datetime.now(timezone.utc))
+    lines.extend([
+        'BEGIN:VEVENT', f'UID:{uid}', f'DTSTAMP:{now}',
+        f'DTSTART:{stamp(start)}', f'DTEND:{stamp(end)}',
+        f'SUMMARY:{escape(title)}', f'LOCATION:{escape(location)}',
+        f'DESCRIPTION:{escape(description)}', f'URL:{url}',
+        'STATUS:CANCELLED' if cancelled else 'STATUS:CONFIRMED',
+        'TRANSP:TRANSPARENT', 'END:VEVENT',
+    ])
+
+
+def generate(events):
+    now = datetime.now(TZ)
+    lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//AAC Committee Calendar//EN',
+             'CALSCALE:GREGORIAN', 'METHOD:PUBLISH', 'X-WR-CALNAME:AAC Committee Meetings',
+             'X-WR-TIMEZONE:America/Chicago']
+    meeting_count = prep_count = 0
+    committee_counts = {}
+    other_meeting_titles = []
+    for rec in sorted(events, key=lambda x: x.get('start', '')):
+        title = str(rec.get('title') or rec.get('fullName') or '')
+        label = classify(title)
+        if not label:
+            if any(contains(norm(title), w) for w in MEETING_TERMS):
+                other_meeting_titles.append(title)
+            continue
+        if not rec.get('start') or not rec.get('end'):
+            print('SKIPPED (missing time):', title, flush=True)
+            continue
+        try:
+            start, end = localtime(rec['start']), localtime(rec['end'])
         except ValueError:
-            print('Skipping invalid date:', title, file=sys.stderr)
+            print('SKIPPED (bad time):', title, flush=True)
             continue
         if end <= start or end < now:
             continue
-        cancelled = str(record.get('isCancelled', 'false')).casefold() == 'true'
-        url = f'https://mycouncil.alamoareascouting.org/Event/{event_id}'
-        lines.extend(event_lines(
-            f'aac-{event_id}@alamoareascouting.org', title, start, end, stamp,
-            url, f'{committee}. Public MyCouncil event: {url}',
-            location=record.get('location') or '', cancelled=cancelled,
-        ))
-        count += 1
+        event_id = str(rec['eventId'])
+        url = rec.get('eventPageURL') or f'https://mycouncil.alamoareascouting.org/Event/{event_id}'
+        cancelled = str(rec.get('isCancelled', False)).lower() == 'true'
+        add_event(lines, f'aac-{event_id}@alamoareascouting.org', title, start, end,
+                  rec.get('location') or '', url, f'{label} committee meeting. Source: {url}', cancelled)
+        meeting_count += 1
+        committee_counts[label] = committee_counts.get(label, 0) + 1
+        print(f'INCLUDED: {start:%Y-%m-%d} | {label} | {title}', flush=True)
         if cancelled:
-            continue  # don't send prep reminders for canceled meetings
-        for days, action, note in PREP_STAGES:
-            when = start.date() - timedelta(days=days)
-            prep_start = datetime.combine(when, time(9, 0), tzinfo=TIMEZONE)
+            continue
+        for days, action in PREP:
+            day = start.date() - timedelta(days=days)
+            prep_start = datetime.combine(day, time(9, 0), tzinfo=TZ)
             prep_end = prep_start + timedelta(minutes=15)
             if prep_end <= now:
                 continue
-            lines.extend(event_lines(
-                f'aac-prep-{event_id}-{days}d@alamoareascouting.org',
-                f'[Prep] {action} — {title}', prep_start, prep_end,
-                stamp, url, f'{committee}: {note} Meeting: {title}. {url}',
-            ))
+            add_event(lines, f'aac-prep-{event_id}-{days}d@alamoareascouting.org',
+                      f'[Prep] {action} — {title}', prep_start, prep_end, '', url,
+                      f'{label}: {action} for {title}. {url}')
             prep_count += 1
-    if count == 0:
-        raise RuntimeError('No committee meetings matched; preserving the previous published calendar.')
+    print('\nCOMMITTEE BREAKDOWN:', committee_counts, flush=True)
+    print('OTHER MEETING TITLES (not matched):', flush=True)
+    for title in sorted(set(other_meeting_titles))[:100]:
+        print('  -', title, flush=True)
+    if not meeting_count:
+        raise RuntimeError('No relevant committee meetings found; preserving existing calendar')
     lines.append('END:VCALENDAR')
-    content = '\r\n'.join(fold(line) for line in lines) + '\r\n'
-    return content, count, prep_count
+    return '\r\n'.join(fold(line) for line in lines) + '\r\n', meeting_count, prep_count
 
 
 def main():
-    events = fetch_events()
-    ics, meetings, preparations = generate(events)
+    events = fetch_all()
+    content, meetings, preps = generate(events)
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_bytes(ics.encode('utf-8'))
-    # Keep the legacy URL usable but empty to avoid duplicate old reminders.
-    # Users should unsubscribe from the old AAC Committee Preparation calendar.
-    legacy = Path('site/aac-preparation.ics')
-    legacy.write_text('BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//AAC Legacy Preparation Calendar//EN\r\nEND:VCALENDAR\r\n', encoding='utf-8')
-    (OUTPUT.parent / 'index.html').write_text(
-        '<!doctype html><html lang="en"><meta charset="utf-8">'
-        '<title>AAC Committee Calendar</title><body><h1>AAC Committee Calendar</h1>'
-        '<p><a href="aac-committees.ics">Committee meetings and preparation dates</a></p>'
-        '<p>Unofficial public calendar conversion; verify changes on MyCouncil.</p>'
-        '</body></html>\n', encoding='utf-8')
-    print(f'Published {meetings} committee meetings and {preparations} preparation dates from {len(events)} CouncilWare events.')
+    OUTPUT.write_bytes(content.encode('utf-8'))
+    (OUTPUT.parent / 'index.html').write_text('<!doctype html><title>AAC Committee Meetings</title><a href="aac-committees.ics">Calendar feed</a>', encoding='utf-8')
+    print(f'PUBLISHED {meetings} meetings and {preps} preparation entries from {len(events)} source events.', flush=True)
 
 
 if __name__ == '__main__':
