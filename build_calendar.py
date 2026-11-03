@@ -130,6 +130,60 @@ def add_event(lines, uid, title, start, end, location, url, description, cancell
     ])
 
 
+def with_derived_fall_events(events):
+    """Create 8–9 PM Fall Events meeting on each published 7–8 PM RATA meeting day.
+
+    Do not fabricate a location; do not duplicate an independently published Fall Events
+    meeting on the same date. Only derive dates from active, future RATA meetings.
+    """
+    now = datetime.now(TZ)
+    existing_fall_dates = set()
+    for rec in events:
+        if classify(rec.get('title') or rec.get('fullName')) == 'Fall Events' and rec.get('start'):
+            try:
+                existing_fall_dates.add(localtime(rec['start']).date())
+            except (ValueError, TypeError):
+                pass
+    derived = []
+    seen_dates = set()
+    for rec in events:
+        title = rec.get('title') or rec.get('fullName') or ''
+        if classify(title) != 'RATA / Shooting Sports':
+            continue
+        if str(rec.get('isCancelled', False)).lower() == 'true':
+            continue
+        try:
+            start, end = localtime(rec['start']), localtime(rec['end'])
+        except (ValueError, TypeError, KeyError):
+            continue
+        if end <= now:
+            continue
+        # Only derive from the actual 7–8 PM RATA committee meeting, not a
+        # training session or a different RATA event.
+        if start.hour != 19 or start.minute != 0 or end.hour != 20 or end.minute != 0:
+            print(f'NOT DERIVING Fall Events (RATA time differs from 7–8 PM): {title} at {start}', flush=True)
+            continue
+        day = start.date()
+        if day in existing_fall_dates or day in seen_dates:
+            print(f'NOT DERIVING Fall Events (already published or derived): {day}', flush=True)
+            continue
+        seen_dates.add(day)
+        source_id = str(rec['eventId'])
+        derived.append({
+            'eventId': f'fall-events-from-rata-{source_id}',
+            'title': 'Fall Events Committee Meeting (schedule inferred from RATA)',
+            'fullName': 'Fall Events Committee Meeting (schedule inferred from RATA)',
+            'start': (start + timedelta(hours=1)).isoformat(),
+            'end': (end + timedelta(hours=1)).isoformat(),
+            'location': '',
+            'eventPageURL': rec.get('eventPageURL') or f'https://mycouncil.alamoareascouting.org/Event/{source_id}',
+            'isCancelled': 'false',
+            '_derived': True,
+        })
+        print(f'DERIVED: {day} | Fall Events | 8:00–9:00 PM from RATA event {source_id}', flush=True)
+    return events + derived
+
+
 def generate(events):
     now = datetime.now(TZ)
     lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//AAC Committee Calendar//EN',
@@ -138,7 +192,7 @@ def generate(events):
     meeting_count = prep_count = 0
     committee_counts = {}
     other_meeting_titles = []
-    for rec in sorted(events, key=lambda x: x.get('start', '')):
+    for rec in sorted(with_derived_fall_events(events), key=lambda x: x.get('start', '')):
         title = str(rec.get('title') or rec.get('fullName') or '')
         label = classify(title)
         if not label:
@@ -158,8 +212,11 @@ def generate(events):
         event_id = str(rec['eventId'])
         url = rec.get('eventPageURL') or f'https://mycouncil.alamoareascouting.org/Event/{event_id}'
         cancelled = str(rec.get('isCancelled', False)).lower() == 'true'
+        description = (f'{label} meeting time inferred from a published 7–8 PM RATA meeting. '
+                       f'Please confirm this 8–9 PM Fall Events meeting and its location. RATA source: {url}'
+                       if rec.get('_derived') else f'{label} committee meeting. Source: {url}')
         add_event(lines, f'aac-{event_id}@alamoareascouting.org', title, start, end,
-                  rec.get('location') or '', url, f'{label} committee meeting. Source: {url}', cancelled)
+                  rec.get('location') or '', url, description, cancelled)
         meeting_count += 1
         committee_counts[label] = committee_counts.get(label, 0) + 1
         print(f'INCLUDED: {start:%Y-%m-%d} | {label} | {title}', flush=True)
@@ -171,9 +228,10 @@ def generate(events):
             prep_end = prep_start + timedelta(minutes=15)
             if prep_end <= now:
                 continue
+            prep_note = 'Time inferred from RATA; verify details. ' if rec.get('_derived') else ''
             add_event(lines, f'aac-prep-{event_id}-{days}d@alamoareascouting.org',
                       f'[Prep] {action} — {title}', prep_start, prep_end, '', url,
-                      f'{label}: {action} for {title}. {url}')
+                      f'{label}: {action} for {title}. {prep_note}{url}')
             prep_count += 1
     print('\nCOMMITTEE BREAKDOWN:', committee_counts, flush=True)
     print('OTHER MEETING TITLES (not matched):', flush=True)
