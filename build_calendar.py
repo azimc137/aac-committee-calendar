@@ -16,11 +16,11 @@ CALENDAR_ID = '27'
 LOOKAHEAD_DAYS = 180
 OUTPUT = Path('site/aac-committees.ics')
 COMMITTEES = {
-    'Aquatics': ('aquatics', 'aquatic'),
+    'Aquatics': ('aquatics', 'aquatic', 'Aquatics Committee Meeting'),
     'Climbing': ('climbing',),
     'COPE': ('cope', 'challenging outdoor personal experience'),
     'Fall Events': ('fall events', 'fall event', 'fall events committee'),
-    'Fishing': ('fishing', 'angling'),
+    'Fishing': ('fishing', 'angling', 'Fishing Committee'),
     'International': ('international','International Scouting Committee Meeting'),
     'Radio': ('radio', 'jota', 'joti', 'jamboree on the air'),
     'RATA / Shooting Sports': ('rata', 'shooting sports', 'shooting sport', 'range and target', 'RATA committee meeting'),
