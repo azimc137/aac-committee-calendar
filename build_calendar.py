@@ -24,7 +24,7 @@ COMMITTEES = {
     'International': ('international','International Scouting Committee Meeting'),
     'Radio': ('radio', 'jota', 'joti', 'jamboree on the air'),
     'RATA / Shooting Sports': ('rata', 'shooting sports', 'shooting sport', 'range and target', 'RATA committee meeting'),
-    'Cub Scout Day Camp': ('Cub Scout Day Camp Planning Committee Meeting', 'CSDC', 'Cub Scout Day Camp'
+    'Cub Scout Day Camp': ('Cub Scout Day Camp Planning Committee Meeting', 'CSDC', 'Cub Scout Day Camp')
 }
 MEETING_TERMS = ('committee', 'meeting', 'meetings', 'planning session', 'planning call',
                  'workgroup', 'working group', 'staff call', 'staff meeting', 'roundtable')
