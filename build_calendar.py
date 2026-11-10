@@ -19,11 +19,11 @@ COMMITTEES = {
     'Aquatics': ('aquatics', 'aquatic'),
     'Climbing': ('climbing',),
     'COPE': ('cope', 'challenging outdoor personal experience'),
-    'Fall Events': ('fall events', 'fall event'),
+    'Fall Events': ('fall events', 'fall event', 'fall events committee'),
     'Fishing': ('fishing', 'angling'),
-    'International': ('international',),
+    'International': ('international','International Scouting Committee Meeting'),
     'Radio': ('radio', 'jota', 'joti', 'jamboree on the air'),
-    'RATA / Shooting Sports': ('rata', 'shooting sports', 'shooting sport', 'range and target'),
+    'RATA / Shooting Sports': ('rata', 'shooting sports', 'shooting sport', 'range and target', 'RATA committee meeting'),
 }
 MEETING_TERMS = ('committee', 'meeting', 'meetings', 'planning session', 'planning call',
                  'workgroup', 'working group', 'staff call', 'staff meeting', 'roundtable')
